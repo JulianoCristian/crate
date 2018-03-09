@@ -47,7 +47,6 @@ import io.crate.sql.tree.Statement;
 import io.crate.types.DataType;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.cluster.ClusterState;
-import org.elasticsearch.cluster.ClusterStateObserver;
 import org.elasticsearch.common.Randomness;
 import org.elasticsearch.common.logging.Loggers;
 
@@ -195,7 +194,9 @@ public class SimplePortal extends AbstractPortal {
         DependencyCarrier dependencyCarrier = portalContext.getExecutor();
         if (!analyzedStatement.isWriteOperation()) {
             resultReceiver = new RetryOnFailureResultReceiver(
-                new ClusterStateObserver(clusterState, dependencyCarrier.clusterService(), null, LOGGER, dependencyCarrier.threadPool().getThreadContext()),
+                dependencyCarrier.clusterService(),
+                clusterState,
+                dependencyCarrier.threadPool().getThreadContext(),
                 // not using planner.currentClusterState().metaData()::hasIndex to make sure the *current*
                 // clusterState at the time of the index check is used
                 indexName -> clusterState.metaData().hasIndex(indexName),

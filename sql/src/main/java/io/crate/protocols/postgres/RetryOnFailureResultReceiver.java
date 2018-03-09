@@ -29,9 +29,12 @@ import io.crate.exceptions.SQLExceptions;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.ClusterStateObserver;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.util.concurrent.ThreadContext;
 import org.elasticsearch.index.IndexNotFoundException;
+import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.transport.ConnectTransportException;
 
 import javax.annotation.Nonnull;
@@ -44,19 +47,25 @@ public class RetryOnFailureResultReceiver implements ResultReceiver {
 
     private static final Logger LOGGER = Loggers.getLogger(RetryOnFailureResultReceiver.class);
 
-    private final ClusterStateObserver clusterStateObserver;
+    private final ClusterService clusterService;
+    private final ClusterState initialState;
+    private final ThreadContext threadContext;
     private final Predicate<String> hasIndex;
     private final ResultReceiver delegate;
     private final UUID jobId;
     private final BiConsumer<UUID, ResultReceiver> retryAction;
     private int attempt = 1;
 
-    public RetryOnFailureResultReceiver(ClusterStateObserver clusterStateObserver,
+    public RetryOnFailureResultReceiver(ClusterService clusterService,
+                                        ClusterState initialState,
+                                        ThreadContext threadContext,
                                         Predicate<String> hasIndex,
                                         ResultReceiver delegate,
                                         UUID jobId,
                                         BiConsumer<UUID, ResultReceiver> retryAction) {
-        this.clusterStateObserver = clusterStateObserver;
+        this.clusterService = clusterService;
+        this.initialState = initialState;
+        this.threadContext = threadContext;
         this.hasIndex = hasIndex;
         this.delegate = delegate;
         this.jobId = jobId;
@@ -83,22 +92,29 @@ public class RetryOnFailureResultReceiver implements ResultReceiver {
         final Throwable error = SQLExceptions.unwrap(wrappedError);
         if (attempt <= Constants.MAX_SHARD_MISSING_RETRIES &&
             (SQLExceptions.isShardFailure(error) || error instanceof ConnectTransportException || indexWasTemporaryUnavailable(error))) {
-            clusterStateObserver.waitForNextChange(new ClusterStateObserver.Listener() {
-                @Override
-                public void onNewClusterState(ClusterState state) {
-                    attempt += 1;
-                    retry();
-                }
 
-                @Override
-                public void onClusterServiceClose() {
-                }
+            if (clusterService.state().blocks().hasGlobalBlock(RestStatus.SERVICE_UNAVAILABLE)) {
+                delegate.fail(error);
+            } else {
+                ClusterStateObserver clusterStateObserver =
+                    new ClusterStateObserver(initialState, clusterService, null, LOGGER, threadContext);
+                clusterStateObserver.waitForNextChange(new ClusterStateObserver.Listener() {
+                    @Override
+                    public void onNewClusterState(ClusterState state) {
+                        attempt += 1;
+                        retry();
+                    }
 
-                @Override
-                public void onTimeout(TimeValue timeout) {
-                    delegate.fail(error);
-                }
-            });
+                    @Override
+                    public void onClusterServiceClose() {
+                    }
+
+                    @Override
+                    public void onTimeout(TimeValue timeout) {
+                        delegate.fail(error);
+                    }
+                });
+            }
         } else {
             delegate.fail(error);
         }

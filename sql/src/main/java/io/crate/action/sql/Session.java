@@ -51,7 +51,6 @@ import io.crate.sql.tree.Statement;
 import io.crate.types.DataType;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.cluster.ClusterState;
-import org.elasticsearch.cluster.ClusterStateObserver;
 import org.elasticsearch.common.Randomness;
 import org.elasticsearch.common.logging.Loggers;
 
@@ -182,8 +181,9 @@ public class Session implements AutoCloseable {
 
         if (!analyzedStatement.isWriteOperation()) {
             resultReceiver = new RetryOnFailureResultReceiver(
-                new ClusterStateObserver(
-                    clusterState, executor.clusterService(), null, LOGGER, executor.threadPool().getThreadContext()),
+                executor.clusterService(),
+                clusterState,
+                executor.threadPool().getThreadContext(),
                 // not using planner.currentClusterState().metaData()::hasIndex to make sure the *current*
                 // clusterState at the time of the index check is used
                 indexName -> clusterState.metaData().hasIndex(indexName),
